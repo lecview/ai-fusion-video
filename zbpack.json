@@ -1,3 +1,4 @@
 {
-  "build_directory": "ai-fusion-video-web"
+  "build_directory": "ai-fusion-video-web",
+  "framework": "next.js"
 }
