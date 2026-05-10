@@ -6,6 +6,7 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
+  Download,
   Ban,
   X,
   Trash2,
@@ -100,6 +101,95 @@ const toolDisplayNames: Record<string, string> = {
   generate_asset_image: "生成资产图片（子Agent）",
   generate_storyboard_video: "生成分镜视频（子Agent）",
 };
+
+const TASK_MEDIA_URL_LINE_REGEXP = /((?:视频地址|下载地址)[:：]\s*)(https?:\/\/[^\s)]+|\/media\/[^\s)]+)/g;
+
+interface TaskMediaLinkInfo {
+  label: string;
+  rawUrl: string;
+  resolvedUrl: string;
+}
+
+function parseTaskContent(content: string): {
+  markdownContent: string;
+  mediaLinks: TaskMediaLinkInfo[];
+} {
+  const mediaLinks: TaskMediaLinkInfo[] = [];
+  const markdownLines = content
+    .split(/\r?\n/)
+    .map((line) => {
+      let extracted = false;
+      const strippedLine = line.replace(
+        TASK_MEDIA_URL_LINE_REGEXP,
+        (_match, prefix, rawUrl) => {
+          const resolvedUrl = resolveMediaUrl(rawUrl) || rawUrl;
+          mediaLinks.push({
+            label: prefix.replace(/[:：]\s*$/, "").trim() || "下载地址",
+            rawUrl,
+            resolvedUrl,
+          });
+          extracted = true;
+          return "";
+        }
+      );
+
+      if (!extracted) {
+        return line;
+      }
+
+      return strippedLine.replace(/[·:：\s-]+$/g, "").trimEnd();
+    })
+    .filter((line) => line.trim().length > 0);
+
+  return {
+    markdownContent: markdownLines.join("\n\n"),
+    mediaLinks,
+  };
+}
+
+function TaskMediaLinks({ mediaLinks }: { mediaLinks: TaskMediaLinkInfo[] }) {
+  if (mediaLinks.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      {mediaLinks.map((mediaLink, index) => (
+        <div
+          key={`${mediaLink.resolvedUrl}-${index}`}
+          className="rounded-xl border border-border/30 bg-muted/20 px-3 py-3"
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-muted-foreground">
+                {mediaLink.label}
+              </p>
+              <a
+                href={mediaLink.resolvedUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 block break-all text-xs leading-relaxed text-muted-foreground underline decoration-dotted underline-offset-2 hover:text-foreground"
+                title={mediaLink.resolvedUrl}
+              >
+                {mediaLink.resolvedUrl}
+              </a>
+            </div>
+            <a
+              href={mediaLink.resolvedUrl}
+              target="_blank"
+              rel="noreferrer"
+              download
+              className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-primary/25 bg-primary/10 px-3 py-2 text-xs font-medium text-primary transition-colors hover:bg-primary/15"
+            >
+              <Download className="h-3.5 w-3.5" />
+              下载视频
+            </a>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function getToolDisplayName(name: string) {
   return toolDisplayNames[name] || name;
@@ -241,7 +331,13 @@ function ToolItem({
           "text-destructive/80": item.status === "error",
         })}
       >
-        {item.status === "calling" ? "…" : item.status === "done" ? "✓" : "✗"}
+        {item.status === "calling" ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : item.status === "done" ? (
+          <CheckCircle2 className="h-3.5 w-3.5" />
+        ) : (
+          <AlertTriangle className="h-3.5 w-3.5" />
+        )}
       </span>
     </div>
   );
@@ -650,18 +746,23 @@ function MessageTimeline({ reasoningText, reasoningDurationMs, timeline, streami
             return null;
           }
         }
+        const { markdownContent, mediaLinks } = parseTaskContent(item.text);
         return (
-          <div key={`content-${idx}`} className="text-sm leading-relaxed">
-            <XMarkdown
-              content={item.text}
-            />
+          <div key={`content-${idx}`} className="space-y-3 text-sm leading-relaxed">
+            {markdownContent ? (
+              <XMarkdown content={markdownContent} />
+            ) : null}
+            <TaskMediaLinks mediaLinks={mediaLinks} />
           </div>
         );
       })}
 
       {/* 错误 */}
       {error && (
-        <p className="text-xs text-destructive">❌ {error}</p>
+        <div className="flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span className="leading-relaxed">{error}</span>
+        </div>
       )}
     </>
   );
@@ -673,6 +774,7 @@ function PipelineDetailPanel({ task }: { task: PipelineTask }) {
   const [idleTimelineLength, setIdleTimelineLength] = useState<number | null>(null);
   const timelineLength = task.state.timeline.length;
   const isIdle = task.status === "running" && idleTimelineLength === timelineLength;
+  const canCancel = task.status === "running" && task.cancellable !== false;
 
   // 外层智能自动滚动（用户上滚打断，滚回底部恢复）
   const timelineRef = useSmartScroll(
@@ -721,7 +823,7 @@ function PipelineDetailPanel({ task }: { task: PipelineTask }) {
             </span>
           </p>
         </div>
-        {task.status === "running" && (
+        {canCancel && (
           <button
             onClick={() => usePipelineStore.getState().cancelPipeline(task.id)}
             className={cn(
@@ -783,6 +885,7 @@ const agentTypeNames: Record<string, string> = {
   asset_image_executor: "资产图片执行",
   storyboard_video_gen: "分镜视频生成",
   storyboard_video_executor: "分镜视频执行",
+  storyboard_episode_compose: "分集合成视频",
   script_assistant: "剧本助手",
   ai_media: "默认助手",
   concept_visualizer: "概念可视化",
@@ -1880,7 +1983,11 @@ function pushReasoningToTimeline(
 function pushContentToTimeline(timeline: TimelineItem[], text: string) {
   const last = timeline[timeline.length - 1];
   if (last && last.type === "content") {
-    last.text += text;
+    last.text = last.text.endsWith("\n\n")
+      ? last.text + text
+      : last.text.endsWith("\n")
+        ? `${last.text}\n${text}`
+        : `${last.text}\n\n${text}`;
     return;
   }
   timeline.push({ type: "content", text });
@@ -1922,7 +2029,11 @@ function pushReasoningToSubTimeline(
 function pushContentToSubTimeline(children: SubTimelineItem[], text: string) {
   const last = children[children.length - 1];
   if (last && last.type === "content") {
-    last.text += text;
+    last.text = last.text.endsWith("\n\n")
+      ? last.text + text
+      : last.text.endsWith("\n")
+        ? `${last.text}\n${text}`
+        : `${last.text}\n\n${text}`;
     return;
   }
   children.push({ type: "content", text });
@@ -2086,6 +2197,28 @@ function messagesToTimeline(messages: AgentMessage[]): MessageTimelineProps["tim
   return timeline;
 }
 
+function resolveHistoryErrorMessage(
+  conversation: AgentConversation,
+  messages: AgentMessage[]
+): string | undefined {
+  const isErrorConversation =
+    conversation.status === "error" || conversation.status === "failed";
+  if (!isErrorConversation) {
+    return undefined;
+  }
+
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    const content = message.content?.trim();
+    if (!content || message.role === "user") {
+      continue;
+    }
+    return content;
+  }
+
+  return "任务执行失败";
+}
+
 // ========== 历史消息详情面板（右侧） ==========
 
 function HistoryDetailPanel({
@@ -2130,6 +2263,7 @@ function HistoryDetailPanel({
 
   // Pipeline 类型：过滤掉用户消息（根据 category 或 agentType 判断）
   const isPipeline =
+    conversation.category === "task" ||
     conversation.category === "pipeline" ||
     (conversation.agentType != null &&
       (PIPELINE_AGENT_TYPES as readonly string[]).includes(conversation.agentType));
@@ -2144,6 +2278,7 @@ function HistoryDetailPanel({
 
   // 转换为统一时间线格式
   const timeline = messagesToTimeline(displayMessages);
+  const historyError = resolveHistoryErrorMessage(conversation, displayMessages);
 
   return (
     <div className="flex flex-col h-full">
@@ -2188,6 +2323,7 @@ function HistoryDetailPanel({
             reasoningDurationMs={firstAssistant?.reasoningDurationMs || undefined}
             timeline={timeline}
             streaming={false}
+            error={historyError}
           />
         )}
       </div>
@@ -2219,6 +2355,7 @@ function PipelineTaskCard({ task }: { task: PipelineTask }) {
 
   const getLatestActivity = (): string => {
     const timeline = task.state.timeline;
+    const isTaskStream = task.cancellable === false;
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
       if (item.type === "reasoning") {
@@ -2227,14 +2364,17 @@ function PipelineTaskCard({ task }: { task: PipelineTask }) {
       if (item.type === "tool") {
         return item.status === "calling"
           ? `正在${getToolDisplayName(item.name)}…`
-          : `${getToolDisplayName(item.name)} ✓`;
+          : `${getToolDisplayName(item.name)} 已完成`;
       }
       if (item.type === "content") {
+        if (isTaskStream) {
+          return task.status === "running" ? "任务执行中…" : "已记录任务结果";
+        }
         return task.status === "running" ? "AI 正在输出…" : "已生成回复";
       }
     }
     if (task.state.reasoningText) return "AI 正在思考…";
-    return "准备中…";
+    return isTaskStream ? "任务准备中…" : "准备中…";
   };
 
   const handleOpenDetail = () => {

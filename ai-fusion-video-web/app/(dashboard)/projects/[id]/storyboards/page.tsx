@@ -13,6 +13,9 @@ import {
   Camera,
   Menu,
   Info,
+  Clapperboard,
+  PlayCircle,
+  AlertCircle,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { motion } from "framer-motion";
@@ -21,6 +24,7 @@ import { scriptApi } from "@/lib/api/script";
 import {
   storyboardApi,
   type Storyboard,
+  type StoryboardEpisode,
   type StoryboardItem,
   type StoryboardScene,
 } from "@/lib/api/storyboard";
@@ -50,7 +54,13 @@ export default function StoryboardTabPage() {
   const params = useParams();
   const projectId = Number(params.id);
   const { project } = useProject();
-  const { addPipeline, setPanelExpanded, setExpandedTaskId } = usePipelineStore();
+  const {
+    addPipeline,
+    attachTaskStream,
+    setPanelExpanded,
+    setExpandedTaskId,
+    setNotificationOpen,
+  } = usePipelineStore();
 
   // 分镜页始终占满 layout 宽度
   useFullWidth(true);
@@ -99,6 +109,12 @@ export default function StoryboardTabPage() {
   // 按场次分组数据
   const [sceneGroups, setSceneGroups] = useState<SceneWithItems[]>([]);
   const [loadingScenes, setLoadingScenes] = useState(false);
+
+  // 当前选中集的合成状态
+  const [currentEpisode, setCurrentEpisode] = useState<StoryboardEpisode | null>(null);
+  const [composedPreviewUrl, setComposedPreviewUrl] = useState<string | null>(null);
+  const [runningComposeEpisodeIds, setRunningComposeEpisodeIds] = useState<number[]>([]);
+  const [submittingComposeEpisodeIds, setSubmittingComposeEpisodeIds] = useState<number[]>([]);
 
   // 滚动定位 refs
   const sceneRefs = useRef<Record<number, HTMLDivElement | null>>({});
@@ -319,7 +335,7 @@ export default function StoryboardTabPage() {
     );
 
     // 观察所有场次元素
-    for (const [, el] of Object.entries(sceneRefs.current)) {
+    for (const el of Object.values(sceneRefs.current) as Array<HTMLDivElement | null>) {
       if (el) observer.observe(el);
     }
 
@@ -461,6 +477,90 @@ export default function StoryboardTabPage() {
       console.error("更新排序失败:", err);
     }
   };
+
+  // 当前选中的 episodeId（episode 或 scene 选择都会有）
+  const currentEpisodeId =
+    sidebarSelection.type === "episode" || sidebarSelection.type === "scene"
+      ? sidebarSelection.episodeId ?? null
+      : null;
+
+  // 拉取当前集详情（含合成状态）
+  const refreshCurrentEpisode = useCallback(async () => {
+    if (!currentEpisodeId) {
+      setCurrentEpisode(null);
+      return;
+    }
+    try {
+      const ep = await storyboardApi.getEpisode(currentEpisodeId);
+      setCurrentEpisode(ep);
+    } catch (err) {
+      console.error("加载集详情失败:", err);
+    }
+  }, [currentEpisodeId]);
+
+  useEffect(() => {
+    refreshCurrentEpisode();
+  }, [refreshCurrentEpisode]);
+
+  /** 提交本集合成视频任务 */
+  const handleComposeEpisodeVideo = useCallback(async () => {
+    if (!currentEpisodeId || !currentEpisode) return;
+    if (
+      submittingComposeEpisodeIds.includes(currentEpisodeId) ||
+      runningComposeEpisodeIds.includes(currentEpisodeId) ||
+      currentEpisode.composeStatus === 1
+    ) {
+      return;
+    }
+
+    const epLabel = currentEpisode.title?.trim()
+      || (currentEpisode.episodeNumber != null ? `第 ${currentEpisode.episodeNumber} 集` : `集 ${currentEpisode.id}`);
+    setSubmittingComposeEpisodeIds((prev) =>
+      prev.includes(currentEpisodeId) ? prev : [...prev, currentEpisodeId]
+    );
+    setNotificationOpen(true);
+    try {
+      const taskId = await storyboardApi.composeEpisodeVideo(currentEpisodeId);
+      setSubmittingComposeEpisodeIds((prev) =>
+        prev.filter((id) => id !== currentEpisodeId)
+      );
+      setRunningComposeEpisodeIds((prev) =>
+        prev.includes(currentEpisodeId) ? prev : [...prev, currentEpisodeId]
+      );
+
+      attachTaskStream({
+        label: `合成本集视频：${epLabel}`,
+        projectId,
+        taskId,
+        cancellable: false,
+        onSettled: () => {
+          setRunningComposeEpisodeIds((prev) =>
+            prev.filter((id) => id !== currentEpisodeId)
+          );
+          void refreshCurrentEpisode();
+        },
+      });
+
+      void refreshCurrentEpisode();
+    } catch (err) {
+      console.error("提交合成任务失败:", err);
+      setSubmittingComposeEpisodeIds((prev) =>
+        prev.filter((id) => id !== currentEpisodeId)
+      );
+      setRunningComposeEpisodeIds((prev) =>
+        prev.filter((id) => id !== currentEpisodeId)
+      );
+    }
+  }, [
+    currentEpisodeId,
+    currentEpisode,
+    submittingComposeEpisodeIds,
+    runningComposeEpisodeIds,
+    projectId,
+    attachTaskStream,
+    setNotificationOpen,
+    refreshCurrentEpisode,
+  ]);
 
   /** 单个镜头生成视频 */
   const handleVideoGen = useCallback(
@@ -622,6 +722,80 @@ export default function StoryboardTabPage() {
             </h2>
           </div>
           <div className="flex items-center gap-2">
+            {/* 合成本集视频 */}
+            {currentEpisodeId && currentEpisode && (() => {
+              const cs = currentEpisode.composeStatus;
+              const isSubmitting = submittingComposeEpisodeIds.includes(currentEpisodeId);
+              const isRunning = runningComposeEpisodeIds.includes(currentEpisodeId) || cs === 1;
+              if (isSubmitting) {
+                return (
+                  <button
+                    disabled
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/30 bg-muted/20 text-muted-foreground shrink-0 cursor-not-allowed"
+                    title="正在提交合成任务"
+                  >
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    提交中…
+                  </button>
+                );
+              }
+              if (isRunning) {
+                return (
+                  <button
+                    disabled
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border/30 bg-muted/20 text-muted-foreground shrink-0 cursor-not-allowed"
+                    title="正在合成本集视频，预计 30s - 3min"
+                  >
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    合成中…
+                  </button>
+                );
+              }
+              if (cs === 2 && currentEpisode.composedVideoUrl) {
+                return (
+                  <div className="hidden sm:flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setComposedPreviewUrl(currentEpisode.composedVideoUrl)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 transition-colors"
+                      title="查看本集合成视频"
+                    >
+                      <PlayCircle className="h-3.5 w-3.5" />
+                      查看本集视频
+                    </button>
+                    <button
+                      onClick={handleComposeEpisodeVideo}
+                      className="flex items-center justify-center w-8 h-8 rounded-lg border border-border/30 bg-muted/20 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+                      title="重新合成"
+                    >
+                      <Clapperboard className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              }
+              if (cs === 3) {
+                return (
+                  <button
+                    onClick={handleComposeEpisodeVideo}
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 transition-colors shrink-0"
+                    title={`上次失败：${currentEpisode.composeErrorMsg || "未知错误"}\n点击重试`}
+                  >
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    重试合成
+                  </button>
+                );
+              }
+              return (
+                <button
+                  onClick={handleComposeEpisodeVideo}
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 transition-colors shrink-0"
+                  title="将本集所有镜头视频按顺序拼接成一个完整视频"
+                >
+                  <Clapperboard className="h-3.5 w-3.5" />
+                  合成本集视频
+                </button>
+              );
+            })()}
+
             {/* 视图切换 */}
             <div className="flex items-center rounded-lg border border-border/30 bg-muted/20 p-0.5 shrink-0">
               <button
@@ -788,6 +962,47 @@ export default function StoryboardTabPage() {
         projectId={projectId}
       />
       </motion.div>
+
+      {/* 合成视频预览弹窗 */}
+      {composedPreviewUrl && (
+        <div
+          onClick={() => setComposedPreviewUrl(null)}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-4xl rounded-xl overflow-hidden bg-card border border-border/30 shadow-xl"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/20">
+              <h3 className="text-sm font-semibold flex items-center gap-2">
+                <PlayCircle className="h-4 w-4 text-emerald-500" />
+                本集合成视频
+              </h3>
+              <div className="flex items-center gap-2">
+                <a
+                  href={composedPreviewUrl}
+                  download
+                  className="text-xs px-3 py-1.5 rounded-lg border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
+                >
+                  下载
+                </a>
+                <button
+                  onClick={() => setComposedPreviewUrl(null)}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-border/30 bg-muted/20 hover:bg-muted/40 transition-colors"
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+            <video
+              src={composedPreviewUrl}
+              controls
+              autoPlay
+              className="w-full max-h-[75vh] bg-black"
+            />
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }

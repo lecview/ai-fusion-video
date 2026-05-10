@@ -45,3 +45,8 @@ server:
 app:
   storage:
     local-base-path: ./data/media
+
+video:
+  compose:
+    ffmpeg-path: ${VIDEO_COMPOSE_FFMPEG_PATH:ffmpeg}
+    ffprobe-path: ${VIDEO_COMPOSE_FFPROBE_PATH:ffprobe}

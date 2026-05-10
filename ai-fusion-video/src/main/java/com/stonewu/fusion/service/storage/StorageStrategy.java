@@ -2,6 +2,8 @@ package com.stonewu.fusion.service.storage;
 
 import com.stonewu.fusion.entity.storage.StorageConfig;
 
+import java.nio.file.Path;
+
 /**
  * 存储策略接口
  * <p>
@@ -34,4 +36,15 @@ public interface StorageStrategy {
      * @return 持久化后的可访问 URL
      */
     String storeBytes(byte[] data, String subDir, String extension, StorageConfig config);
+
+    /**
+     * 从本地文件保存到当前存储后端。
+     *
+     * @param filePath   本地文件路径
+     * @param subDir     子目录
+     * @param extension  文件扩展名
+     * @param config     存储配置
+     * @return 持久化后的可访问 URL
+     */
+    String storeFile(Path filePath, String subDir, String extension, StorageConfig config);
 }

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.CopyOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -84,6 +85,25 @@ public class LocalStorageStrategy implements StorageStrategy {
             Files.write(target, data);
 
             log.info("[LocalStorage] 文件已保存: {} ({} bytes)", target, data.length);
+            return URL_PREFIX + "/" + subDir + "/" + filename;
+        } catch (IOException e) {
+            throw new RuntimeException("本地存储文件失败: " + e.getMessage(), e);
+        }
+    }
+
+    @Override
+    public String storeFile(Path filePath, String subDir, String extension, StorageConfig config) {
+        String basePath = resolveBasePath(config);
+        String filename = IdUtil.fastSimpleUUID() + "." + extension;
+
+        try {
+            Path dir = Paths.get(basePath, subDir);
+            Files.createDirectories(dir);
+            Path target = dir.resolve(filename);
+            Files.copy(filePath, target, new CopyOption[]{StandardCopyOption.REPLACE_EXISTING});
+
+            long fileSize = Files.size(target);
+            log.info("[LocalStorage] 文件已保存: {} ({} bytes)", target, fileSize);
             return URL_PREFIX + "/" + subDir + "/" + filename;
         } catch (IOException e) {
             throw new RuntimeException("本地存储文件失败: " + e.getMessage(), e);

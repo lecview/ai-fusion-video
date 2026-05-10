@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -73,6 +74,23 @@ public class MediaStorageService {
         log.info("[MediaStorage] 直接保存字节: size={}, subDir={}, ext={}, strategy={}",
                 data.length, subDir, extension, strategy.getType());
         return strategy.storeBytes(data, subDir, extension, config);
+    }
+
+    /**
+     * 从本地文件保存到默认存储后端
+     *
+     * @param filePath   本地文件路径
+     * @param subDir     子目录
+     * @param extension  文件扩展名
+     * @return 持久化后的可访问 URL
+     */
+    public String storeFile(Path filePath, String subDir, String extension) {
+        StorageConfig config = storageConfigService.getDefaultConfig();
+        StorageStrategy strategy = resolveStrategy(config);
+
+        log.info("[MediaStorage] 直接保存文件: path={}, subDir={}, ext={}, strategy={}",
+                filePath, subDir, extension, strategy.getType());
+        return strategy.storeFile(filePath, subDir, extension, config);
     }
 
     private StorageStrategy resolveStrategy(StorageConfig config) {

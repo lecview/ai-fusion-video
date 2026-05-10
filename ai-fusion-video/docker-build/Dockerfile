@@ -4,6 +4,10 @@ LABEL maintainer="Stonewu <https://github.com/Stonewuu>"
 
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg curl \
+  && rm -rf /var/lib/apt/lists/*
+
 COPY app.jar app.jar
 
 RUN mkdir -p /app/data/media

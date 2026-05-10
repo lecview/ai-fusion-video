@@ -20,6 +20,8 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -91,6 +93,24 @@ public class S3StorageStrategy implements StorageStrategy {
         return accessUrl;
     }
 
+    @Override
+    public String storeFile(Path filePath, String subDir, String extension, StorageConfig config) {
+        validateConfig(config);
+
+        String objectKey = buildObjectKey(config, subDir, extension);
+        String contentType = guessContentType(extension);
+        uploadFileToS3(config, objectKey, filePath, contentType);
+
+        String accessUrl = buildAccessUrl(config, objectKey);
+        try {
+            log.info("[S3Storage] 文件已上传: key={}, size={} bytes, url={}",
+                    objectKey, Files.size(filePath), accessUrl);
+        } catch (IOException e) {
+            log.info("[S3Storage] 文件已上传: key={}, url={}", objectKey, accessUrl);
+        }
+        return accessUrl;
+    }
+
     private void uploadToS3(StorageConfig config, String objectKey, byte[] data, String contentType) {
         S3Client s3 = buildS3Client(config);
         try {
@@ -101,6 +121,21 @@ public class S3StorageStrategy implements StorageStrategy {
                 putBuilder.contentType(contentType);
             }
             s3.putObject(putBuilder.build(), RequestBody.fromBytes(data));
+        } finally {
+            s3.close();
+        }
+    }
+
+    private void uploadFileToS3(StorageConfig config, String objectKey, Path filePath, String contentType) {
+        S3Client s3 = buildS3Client(config);
+        try {
+            PutObjectRequest.Builder putBuilder = PutObjectRequest.builder()
+                    .bucket(config.getBucketName())
+                    .key(objectKey);
+            if (StrUtil.isNotBlank(contentType)) {
+                putBuilder.contentType(contentType);
+            }
+            s3.putObject(putBuilder.build(), RequestBody.fromFile(filePath));
         } finally {
             s3.close();
         }
